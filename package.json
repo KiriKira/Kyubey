@@ -1,0 +1,13 @@
+{
+  "name": "kyubey",
+  "private": true,
+  "description": "Stateless FCM push relay for mahogsm server nodes",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "3.90.0"
+  }
+}

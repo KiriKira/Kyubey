@@ -1,0 +1,15 @@
+name = "kyubey"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+# Secrets (wrangler secret put):
+#   SEAL_KEY             openssl rand -base64 32; changing it retires every endpoint
+#   FCM_SERVICE_ACCOUNT  the Firebase service-account JSON for the Madoka build
+
+# At most 60 wake-ups a minute per endpoint. Optional: without the binding
+# the relay relies on FCM's own throttling.
+[[unsafe.bindings]]
+name = "RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 60, period = 60 }
