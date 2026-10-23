@@ -36,6 +36,10 @@ The deploy prints the relay URL, for example `https://kyubey.<account>.workers.d
 with it: set the Actions variable `PUSH_RELAY_URL` in the client repository (or the environment
 variable `MAHOGSM_PUSH_RELAY_URL` for a local build). Server nodes need no configuration.
 
+- On a custom domain, the zone's bot and challenge features must not touch the relay: nodes on
+  VPS addresses and phones are API clients and cannot solve a challenge (a `403` with
+  `cf-mitigated: challenge`). Turn off Bot Fight Mode for the zone, and skip any WAF or Security
+  Level challenge for the relay's hostname. The `workers.dev` URL avoids zone settings entirely.
 - Keep `SEAL_KEY` fixed: replacing it retires every endpoint. Phones then register again within a day.
 - The rate limit (60 wake-ups a minute per endpoint) uses Cloudflare's rate-limiting binding in
   `wrangler.toml`; remove that block if your account does not have it.
