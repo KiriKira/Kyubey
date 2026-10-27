@@ -12,6 +12,8 @@ export class TokenGone extends Error {}
 export class Misconfigured extends Error {}
 /** A failure worth retrying later. */
 export class Transient extends Error {}
+/** The message's TTL ran out before FCM was asked to deliver it. */
+export class Expired extends Error {}
 
 const cache = { account: null, key: null, accessToken: null, until: 0 };
 
@@ -74,16 +76,24 @@ async function accessToken(env, fetchImpl, now) {
   return cache.accessToken;
 }
 
-/** Sends a content-free, high-priority data message. */
-export async function send(env, token, data, { validateOnly = false, fetchImpl = fetch, now = Date.now } = {}) {
+/**
+ * Sends a content-free data message. A TTL counts from `started`: time the
+ * relay spends, signing in included, comes off it, and a message whose TTL
+ * ran out is not sent. A TTL of 0 asks FCM to deliver now or drop it.
+ */
+export async function send(env, token, data, {
+  validateOnly = false, fetchImpl = fetch, now = Date.now, priority = "HIGH", ttlMs = 60_000, started = now(),
+} = {}) {
   const sa = account(env);
   const access = await accessToken(env, fetchImpl, now);
+  const left = ttlMs === 0 ? 0 : ttlMs - (now() - started);
+  if (ttlMs > 0 && left <= 0) throw new Expired();
   const response = await fetchImpl(`${SEND_BASE}${encodeURIComponent(sa.project_id)}/messages:send`, {
     method: "POST",
     headers: { authorization: `Bearer ${access}`, "content-type": "application/json" },
     body: JSON.stringify({
       validate_only: validateOnly,
-      message: { token, data, android: { priority: "HIGH", ttl: "60s" } },
+      message: { token, data, android: { priority, ttl: `${left / 1000}s` } },
     }),
   });
   if (response.ok) return;

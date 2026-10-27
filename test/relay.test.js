@@ -48,8 +48,8 @@ async function register(token = "fcm-device-token") {
   return (await response.json()).endpoint;
 }
 
-function wake(endpoint, body, deps) {
-  return handle(new Request(endpoint, { method: "POST", body: JSON.stringify(body) }), env, deps);
+function wake(endpoint, body, deps, headers = {}) {
+  return handle(new Request(endpoint, { method: "POST", body: JSON.stringify(body), headers }), env, deps);
 }
 
 beforeEach(() => resetCache());
@@ -60,14 +60,88 @@ test("an endpoint wakes its device with a fixed, content-free message", async ()
   assert.ok(!endpoint.includes("fcm-device-token"), "the token is sealed");
   const g = google();
   const deviceId = "6020d447-2e24-476c-90ad-6cbb07ed8914";
-  const response = await wake(endpoint, { kind: "call", device_id: deviceId, number: "+1555", text: "hi" }, { fetch: g.fetch });
+  const response = await wake(endpoint, { kind: "call", device_id: deviceId, number: "+1555", text: "hi" }, { fetch: g.fetch, now: () => 0 });
   assert.equal(response.status, 201);
   const [sent] = g.calls.sends;
   assert.equal(sent.validate_only, false);
   assert.equal(sent.message.token, "fcm-device-token");
   assert.deepEqual(sent.message.data, { type: "sync", v: "1", kind: "call", device_id: deviceId });
   assert.equal(sent.message.android.priority, "HIGH");
+  assert.equal(sent.message.android.ttl, "60s");
   assert.equal(sent.message.notification, undefined);
+  assert.equal(response.headers.get("kyubey-wire"), "1,2");
+});
+
+test("wire 2 forwards identifiers as strings and drops everything else", async () => {
+  const endpoint = await register();
+  const g = google();
+  const deviceId = "6020d447-2e24-476c-90ad-6cbb07ed8914";
+  const callId = "0b7a3c2e-8f4d-4e1a-9c6b-2d5e8f1a3b7c";
+  const response = await wake(endpoint, {
+    v: 2, kind: "call", device_id: deviceId, wake_id: "call-event-187", call_id: callId,
+    revision: 4, endpoint_generation: 2, number: "+1555", url: "https://elsewhere.test",
+  }, { fetch: g.fetch });
+  assert.equal(response.status, 201);
+  assert.deepEqual(g.calls.sends[0].message.data, {
+    type: "sync", v: "2", kind: "call", device_id: deviceId, wake_id: "call-event-187",
+    call_id: callId, revision: "4", endpoint_generation: "2",
+  });
+});
+
+test("wire 1 ignores wire 2 fields, so older phones keep getting what they understand", async () => {
+  const endpoint = await register();
+  const g = google();
+  await wake(endpoint, { kind: "sms", wake_id: "sms-event-9", revision: 3 }, { fetch: g.fetch });
+  assert.deepEqual(g.calls.sends[0].message.data, { type: "sync", v: "1", kind: "sms" });
+});
+
+test("TTL and Urgency headers set FCM's TTL, less the relay's own time, and priority", async () => {
+  const endpoint = await register();
+  const g = google();
+  let clock = 1_000_000;
+  const deps = { fetch: async (url, init) => { clock += 250; return g.fetch(url, init); }, now: () => clock };
+  await wake(endpoint, { v: 2, kind: "call" }, deps, { TTL: "18", Urgency: "high" });
+  await wake(endpoint, { v: 2, kind: "sms" }, deps, { ttl: "86400", urgency: "normal" });
+  await wake(endpoint, { v: 2, kind: "sms" }, deps, { ttl: "0", urgency: "very-low" });
+  const [call, sms, now] = g.calls.sends.map((sent) => sent.message.android);
+  // The first wake-up also signs in: one more round trip comes off its TTL.
+  assert.deepEqual(call, { priority: "HIGH", ttl: "17.75s" });
+  assert.deepEqual(sms, { priority: "NORMAL", ttl: "86400s" });
+  assert.deepEqual(now, { priority: "NORMAL", ttl: "0s" });
+});
+
+test("a message whose TTL runs out in the relay is not sent", async () => {
+  const endpoint = await register();
+  const g = google();
+  let clock = 0;
+  const deps = { fetch: async (url, init) => { clock += 2_000; return g.fetch(url, init); }, now: () => clock };
+  const response = await wake(endpoint, { v: 2, kind: "call" }, deps, { ttl: "1" });
+  assert.equal(response.status, 504);
+  assert.equal(g.calls.sends.length, 0);
+});
+
+test("malformed wire 2 fields and delivery headers are refused before anything is sent", async () => {
+  const endpoint = await register();
+  const g = google();
+  const callId = "0b7a3c2e-8f4d-4e1a-9c6b-2d5e8f1a3b7c";
+  for (const body of [
+    { v: 3, kind: "sms" },
+    { v: "2", kind: "sms" },
+    { v: 2, kind: "sms", call_id: callId },
+    { v: 2, kind: "call", call_id: "not-a-uuid" },
+    { v: 2, kind: "call", wake_id: "has space" },
+    { v: 2, kind: "call", wake_id: "x".repeat(65) },
+    { v: 2, kind: "call", revision: -1 },
+    { v: 2, kind: "call", revision: 1.5 },
+    { v: 2, kind: "call", endpoint_generation: 0 },
+    { v: 2, kind: "call", endpoint_generation: "2" },
+  ]) {
+    assert.equal((await wake(endpoint, body, { fetch: g.fetch })).status, 400, JSON.stringify(body));
+  }
+  for (const headers of [{ ttl: "-1" }, { ttl: "1.5" }, { ttl: "99999999" }, { urgency: "urgent" }]) {
+    assert.equal((await wake(endpoint, { v: 2, kind: "call" }, { fetch: g.fetch }, headers)).status, 400, JSON.stringify(headers));
+  }
+  assert.equal(g.calls.sends.length, 0);
 });
 
 test("check validates without delivering, and the access token is reused", async () => {
@@ -119,6 +193,23 @@ test("a rate-limited endpoint is told to slow down", async () => {
   const limited = { ...env, RATE_LIMITER: { limit: async () => ({ success: false }) } };
   const response = await handle(new Request(endpoint, { method: "POST", body: '{"kind":"sms"}' }), limited, { fetch: google().fetch });
   assert.equal(response.status, 429);
+});
+
+test("SMS hints and calls draw on separate rate limits", async () => {
+  const endpoint = await register();
+  const used = new Map();
+  const limiter = { limit: async ({ key }) => {
+    used.set(key, (used.get(key) ?? 0) + 1);
+    return { success: used.get(key) <= 2 };
+  } };
+  const limited = { ...env, RATE_LIMITER: limiter };
+  const post = (kind) => handle(new Request(endpoint, { method: "POST", body: JSON.stringify({ kind }) }), limited, { fetch: google().fetch });
+  for (let i = 0; i < 2; i++) assert.equal((await post("sms")).status, 201);
+  assert.equal((await post("sms")).status, 429);
+  assert.equal((await post("call")).status, 201);
+  const keys = [...used.keys()];
+  assert.deepEqual(keys.map((key) => key.split(":")[0]).sort(), ["call", "sms"]);
+  assert.ok(keys.every((key) => key.endsWith(new URL(endpoint).pathname.slice(-32))));
 });
 
 test("an unconfigured relay says so", async () => {
