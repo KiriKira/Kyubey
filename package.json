@@ -1,6 +1,7 @@
 {
   "name": "kyubey",
   "private": true,
+  "license": "MIT",
   "description": "Stateless FCM push relay for mahogsm server nodes",
   "type": "module",
   "scripts": {
