@@ -44,7 +44,7 @@ npx wrangler secret put FCM_SERVICE_ACCOUNT < firebase-service-account.json
 npx wrangler deploy
 ```
 
-部署完成后会输出中继地址（例如 `https://kyubey.<account>.workers.dev`）。编译 Madoka 时把它设为 Madoka 仓库的 Actions 变量 `PUSH_RELAY_URL`（本地构建用环境变量 `MAHOGSM_PUSH_RELAY_URL`）。SoulGem 接受任意 `https://` 唤醒链接，无需配置；GriefSeed 需要把 `PUSH_ALLOWED_HOSTS` 改成你的中继主机名。
+部署完成后会输出中继地址（例如 `https://kyubey.<account>.workers.dev`）。编译 Madoka 时把它设为推送中继地址（`MAHOGSM_PUSH_RELAY_URL`）。SoulGem 接受任意 `https://` 唤醒链接，无需配置；GriefSeed 需要把 `PUSH_ALLOWED_HOSTS` 改成你的中继主机名。
 
 ## 🔌 节点调用接口
 
@@ -66,7 +66,6 @@ curl -X POST "$ENDPOINT" -H 'Content-Type: application/json' \
 - **自定义域名：** 对该域名关闭 Bot Fight Mode，并让 WAF / Security Level 质询跳过中继主机名，否则节点和手机会收到带 `cf-mitigated: challenge` 的 `403`。直接用 `workers.dev` 域名可避开此问题。
 - **保持 `SEAL_KEY` 固定：** 更换会让已签发的唤醒链接全部失效，手机会在一天内自动重新注册。
 - **限流：** 使用 `wrangler.toml` 里的 Cloudflare rate-limiting binding；账号不支持时删掉那一段即可。
-- **CI 部署：** `.github/workflows/deploy.yml` 可手动部署 `main`，需要仓库 secrets `CLOUDFLARE_API_TOKEN` 与 `CLOUDFLARE_ACCOUNT_ID`。
 - **本地开发：** 把两个 secret 写入 `.dev.vars` 后运行 `npx wrangler dev`；`npm test` 运行单元测试（无额外依赖）。
 
 ## 📄 许可证
